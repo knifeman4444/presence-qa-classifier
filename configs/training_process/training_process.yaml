@@ -2,7 +2,7 @@ training:
   resume_from_checkpoint: false
   early_stopping_patience: 3
   dataset_num_proc: 2
-  
+
 validation:
   val_size: 0.005
   save_total_limit: 2

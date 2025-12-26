@@ -7,5 +7,6 @@ defaults:
   - _self_
 
 project_name: "presence_qa_classifier"
-experiment_description: "Initial experiment with Gemma 270m and multiple datasets"
+experiment_description:
+  "Initial experiment with Gemma 270m and multiple datasets"
 random_state: 42

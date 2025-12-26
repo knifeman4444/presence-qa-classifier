@@ -2,22 +2,22 @@
 Model training class and main execution function
 """
 
+import logging
+from pathlib import Path
+from typing import Dict, List, Optional
+
+import mlflow
+from datasets import Dataset
+from omegaconf import DictConfig, OmegaConf
+from tqdm import tqdm
+from transformers import EarlyStoppingCallback
+from trl import SFTConfig, SFTTrainer
 from unsloth import FastLanguageModel
 from unsloth.chat_templates import get_chat_template, train_on_responses_only
 
-import logging
-import mlflow
-import json
-from tqdm import tqdm
-from omegaconf import DictConfig, OmegaConf
-from datasets import Dataset
-from trl import SFTConfig, SFTTrainer
-from transformers import EarlyStoppingCallback
-from pathlib import Path
-from typing import Optional, List, Dict
-
 from presence_qa_classifier.data_loader import DataLoader
 from presence_qa_classifier.metrics import calculate_accuracy
+
 
 logger = logging.getLogger(__name__)
 
@@ -68,6 +68,7 @@ class ModelTrainer:
 
         output_dir = Path(self.config.models.output_dir) / self.config.project_name
         output_dir.mkdir(parents=True, exist_ok=True)
+        early_stopping_patience = self.config.training_process.training.early_stopping_patience
 
         training_args = SFTConfig(
             dataset_text_field="text",
@@ -100,7 +101,7 @@ class ModelTrainer:
             train_dataset=train_dataset,
             eval_dataset=eval_dataset,
             args=training_args,
-            callbacks=[EarlyStoppingCallback(early_stopping_patience=self.config.training_process.training.early_stopping_patience)]
+            callbacks=[EarlyStoppingCallback(early_stopping_patience=early_stopping_patience)],
         )
 
         # Train on responses only (Gemma specific)
@@ -115,92 +116,85 @@ class ModelTrainer:
     def train(self):
         """Train the model"""
         logger.info("Starting training...")
-        
-        resume_from_checkpoint = self.config.training_process.training.resume_from_checkpoint  
-        trainer_stats = self.trainer.train(
-            resume_from_checkpoint=resume_from_checkpoint
-        )
-        
+
+        resume_from_checkpoint = self.config.training_process.training.resume_from_checkpoint
+        trainer_stats = self.trainer.train(resume_from_checkpoint=resume_from_checkpoint)
+
         logger.info(f"Training completed. Runtime: {trainer_stats.metrics['train_runtime']:.2f}s")
-        
+
         return trainer_stats
 
     def test(self, test_dataset: Dataset) -> Dict[str, float]:
         """
         Ugly test of the model just manually generating the answer.
-        
+
         Args:
             test_dataset: Dataset containing 'conversations' column
-            
+
         Returns:
             Dictionary of metrics
         """
         logger.info("Starting generation testing...")
-        
+
         if test_dataset is None or len(test_dataset) == 0:
             logger.warning("Test dataset is empty. Skipping evaluation.")
             return {}
 
         FastLanguageModel.for_inference(self.model)
-        
+
         predictions: List[str] = []
         references: List[str] = []
-        
+
         for item in tqdm(test_dataset, desc="Generating"):
             conversation = item.get("conversations")
             if not conversation:
                 continue
-                
+
             # Last message is the assistant response (ground truth)
             ground_truth = conversation[-1]["content"]
-            
+
             # Everything before is the prompt
             prompt_msgs = conversation[:-1]
-            
+
             # Prepare prompt
             prompt_text = self.tokenizer.apply_chat_template(
-                prompt_msgs,
-                tokenize=False,
-                add_generation_prompt=True
+                prompt_msgs, tokenize=False, add_generation_prompt=True
             )
-            
+
             inputs = self.tokenizer([prompt_text], return_tensors="pt").to("cuda")
             outputs = self.model.generate(
-                **inputs,
-                max_new_tokens=4,
-                use_cache=True,
-                pad_token_id=self.tokenizer.eos_token_id
+                **inputs, max_new_tokens=4, use_cache=True, pad_token_id=self.tokenizer.eos_token_id
             )
-            
+
             # Decode only new tokens
-            generated_ids = outputs[:, inputs.input_ids.shape[-1]:]
+            generated_ids = outputs[:, inputs.input_ids.shape[-1] :]
             generated_text = self.tokenizer.batch_decode(generated_ids, skip_special_tokens=True)[0]
-            
+
             pred = generated_text.strip().lower()
             ref = ground_truth.strip().lower()
             predictions.append(pred)
             references.append(ref)
-            
+
         accuracy = calculate_accuracy(predictions, references)
         accuracy_yes_no = calculate_accuracy(predictions, references, filter_labels=["yes", "no"])
         hallucination_rate = 1 - calculate_accuracy(predictions, references, filter_labels=["idk"])
-        
+
         metrics = {
             "test_accuracy": accuracy,
             "test_accuracy_yes_no": accuracy_yes_no,
             "test_hallucination_rate": hallucination_rate,
         }
-        
+
         logger.info(f"Test Generation Metrics: {metrics}")
-        
+
         if predictions:
             logger.info(f"Example 1 - Pred: '{predictions[0]}', Ref: '{references[0]}'")
             if len(predictions) > 1:
                 logger.info(f"Example 2 - Pred: '{predictions[1]}', Ref: '{references[1]}'")
-        
+
         if not self.config.logging.no_mlflow:
-             mlflow.log_metrics(metrics)
-             
+            mlflow.log_metrics(metrics)
+
         return metrics
 
     def save_model(self, output_dir: Optional[Path] = None):
@@ -231,11 +225,10 @@ def train(cfg: DictConfig):
         data_loader = DataLoader(cfg)
         # Unpack datasets (Train, Val, Test)
         raw_train_dataset, raw_eval_dataset, raw_test_dataset = data_loader.load_datasets()
-        
+
         # 3. Apply Chat Template (requires tokenizer from trainer)
         train_dataset, eval_dataset = data_loader.apply_chat_template(
-            [raw_train_dataset, raw_eval_dataset],
-            trainer.tokenizer
+            [raw_train_dataset, raw_eval_dataset], trainer.tokenizer
         )
 
         # 4. Setup Trainer with formatted data
