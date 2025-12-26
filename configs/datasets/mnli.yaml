@@ -2,5 +2,5 @@ name: "mnli"
 data_preparer: "mnli"
 data_path: "data/multinli_1.0/multinli_1.0_train.jsonl"
 test_data_path: null
-system_prompt_path: "data/multinli_1.0/system_prompt.txt"
+system_prompt_path: "data_system_prompts/mnli_system_prompt.txt"
 training_subset_size: 10000

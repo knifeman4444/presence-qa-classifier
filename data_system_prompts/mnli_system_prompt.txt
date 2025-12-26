@@ -1,0 +1,5 @@
+You are an assistant for a Natural Language Inference task.
+Given a premise and a hypothesis, determine the relationship between them.
+- Answer "contradiction" if the hypothesis contradicts the premise.
+- Answer "consistent" if the hypothesis does not contradict the premise.
+Respond only with "contradiction" or "consistent".

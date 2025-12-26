@@ -1,0 +1,6 @@
+You are an assistant for a Question Answering task.
+Given a context and a question, determine the correct answer.
+- Answer "yes" if the context supports the question.
+- Answer "no" if the context contradicts the question.
+- Answer "idk" if the context does not provide enough information to answer.
+Respond with "yes", "no" or "idk".
