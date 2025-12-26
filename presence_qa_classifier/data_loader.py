@@ -78,16 +78,15 @@ class DataLoader:
             
             logger.info(f"  Added {len(ds_train)} train samples, {len(ds_test)} test samples.")
 
-        # Shuffle all training conversations
-        random.shuffle(all_train_conversations)
         # Create HF Datasets
         combined_train_ds = Dataset.from_dict({"conversations": all_train_conversations})
+        combined_train_ds.shuffle(seed=self.config.random_state)
         
         # If we have test data
         combined_test_ds = None
         if all_test_conversations:
             combined_test_ds = Dataset.from_dict({"conversations": all_test_conversations})
-
+        
         logger.info(f"Total Combined Train: {len(combined_train_ds)}")
         logger.info(f"Total Combined Test: {len(combined_test_ds)}")
 
