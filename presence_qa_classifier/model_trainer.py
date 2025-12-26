@@ -2,6 +2,12 @@
 Model training class and main execution function
 """
 
+# unsloth should be imported first to avoid problems
+# but pre-commit isn't working without this trick
+if True:
+    from unsloth import FastLanguageModel
+    from unsloth.chat_templates import get_chat_template, train_on_responses_only
+
 import logging
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -12,8 +18,6 @@ from omegaconf import DictConfig, OmegaConf
 from tqdm import tqdm
 from transformers import EarlyStoppingCallback
 from trl import SFTConfig, SFTTrainer
-from unsloth import FastLanguageModel
-from unsloth.chat_templates import get_chat_template, train_on_responses_only
 
 from presence_qa_classifier.data_loader import DataLoader
 from presence_qa_classifier.metrics import calculate_accuracy
