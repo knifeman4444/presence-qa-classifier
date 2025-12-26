@@ -1,0 +1,13 @@
+training:
+  resume_from_checkpoint: false
+  early_stopping_patience: 3
+  dataset_num_proc: 2
+  
+validation:
+  val_size: 0.03
+  save_total_limit: 3
+  eval_strategy: "steps"
+  save_strategy: "steps"
+  load_best_model_at_end: true
+  metric_for_best_model: "eval_loss"
+  greater_is_better: false

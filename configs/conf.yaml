@@ -1,0 +1,11 @@
+defaults:
+  - models: gemma270m
+  - datasets/boolq@datasets.boolq
+  - datasets/mnli@datasets.mnli
+  - training_process: training_process
+  - logging: mlflow
+  - _self_
+
+project_name: "presence_qa_classifier"
+experiment_description: "Initial experiment with Gemma 270m and multiple datasets"
+random_state: 42

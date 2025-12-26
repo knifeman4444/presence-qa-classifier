@@ -3,100 +3,128 @@ Data loading and preprocessing class
 """
 
 import logging
+from typing import Tuple, Optional, List
 from datasets import Dataset
-from presence_qa_classifier.config import Config
+from omegaconf import DictConfig
+import random
+
+from presence_qa_classifier.data_preparation.boolq_preparation import load_boolq_dataset
+from presence_qa_classifier.data_preparation.mnli_preparation import load_mnli_dataset
 
 logger = logging.getLogger(__name__)
-
-# Import med_simple converter
-try:
-    from data.train.dialogue.med_simple.convert_to_unsloth_format import (
-        convert_to_unsloth_format as med_simple_convert_to_unsloth_format,
-    )
-except ImportError:
-    med_simple_convert_to_unsloth_format = None
-
-# Import gorstroy converter (optional)
-try:
-    from data.train.dialogue.gorstroy_add_info.convert_to_unsloth_format import (
-        convert_to_unsloth_format as gorstroy_convert_to_unsloth_format,
-    )
-except ImportError:
-    gorstroy_convert_to_unsloth_format = None
 
 
 class DataLoader:
     """Data loading and preprocessing class"""
 
-    def __init__(self, config: Config):
+    def __init__(self, config: DictConfig):
         self.config = config
 
-    def load_dataset(self, use_validation: bool = True):
-        """Load the raw dataset using conversion functions"""
-        logger.info("Loading dataset...")
+    def load_datasets(self) -> Tuple[Dataset, Optional[Dataset]]:
+        """
+        Load datasets from config.
+        For each dataset in config.datasets:
+          - Load train and test (if available)
+          - Merge train and test files separately
+          - Split train into actual train and validation
+          - Return (actual_train_dataset, validation_dataset, test_dataset)
+        """
+        logger.info("Loading datasets...")
 
-        try:
-            # Choose conversion function
-            if getattr(self.config, "data_preparer", "medsimple") == "medsimple":
-                if med_simple_convert_to_unsloth_format is None:
-                    raise ImportError("med_simple_convert_to_unsloth_format is not available.")
-                convert_fn = med_simple_convert_to_unsloth_format
-           else:
-                raise ValueError(f"Unknown data_preparer: {getattr(self.config, 'data_preparer')}")
+        all_train_conversations = []
+        all_test_conversations = []
 
-            result = convert_fn(include_validation=use_validation)
-
-            train_data, val_data = None, None
-
-            if use_validation:
-                if isinstance(result, tuple):
-                    train_data, val_data = result
-                else:
-                    train_data, val_data = result, None
-                    logger.warning("Validation data unavailable despite request.")
+        # Iterate over datasets in the config list
+        # config.datasets is a list of dataset configs
+        
+        for dataset_cfg in self.config.datasets.values():
+            logger.info(f"Processing dataset: {dataset_cfg.name}")
+            
+            raw_data = None
+            if dataset_cfg.data_preparer == "boolq":
+                 raw_data = load_boolq_dataset(
+                     dataset_cfg.data_path,
+                     dataset_cfg.system_prompt_path,
+                     dataset_cfg.test_data_path
+                 )
+            elif dataset_cfg.data_preparer == "mnli":
+                 raw_data = load_mnli_dataset(
+                     dataset_cfg.data_path,
+                     dataset_cfg.system_prompt_path,
+                     dataset_cfg.test_data_path
+                 )
             else:
-                train_data = result
+                 raise ValueError(f"Unknown data_preparer: {dataset_cfg.data_preparer}")
+            # raw_data is either List (Train Only) or Tuple(Train List, Test List)
+            
+            ds_train = []
+            ds_test = []
 
-            # Ensure Dataset type
-            train_data = self._ensure_dataset(train_data, "train")
-            if val_data:
-                val_data = self._ensure_dataset(val_data, "validation")
+            if isinstance(raw_data, tuple):
+                ds_train = raw_data[0]
+                ds_test = raw_data[1]
+            elif isinstance(raw_data, list):
+                ds_train = raw_data
+                ds_test = [] # No test data provided for this source
+            else:
+                 raise ValueError(f"Unexpected data format from loader for {dataset_cfg.name}")
 
-            logger.info(f"Loaded: Train={len(train_data)} samples" + (f", Val={len(val_data)} samples" if val_data else ""))
-            return train_data, val_data
+            # Take subset of training data if specified
+            if dataset_cfg.get("training_subset_size", None):
+                ds_train = random.sample(ds_train, dataset_cfg.training_subset_size)
 
-        except Exception as e:
-            logger.error(f"Error loading data: {e}")
-            raise RuntimeError(f"Data loading failed: {e}")
+            all_train_conversations.extend(ds_train)
+            all_test_conversations.extend(ds_test)
+            
+            logger.info(f"  Added {len(ds_train)} train samples, {len(ds_test)} test samples.")
 
-    def _ensure_dataset(self, data, name):
-        if data and not isinstance(data, Dataset):
-            if isinstance(data, list):
-                return Dataset.from_list(data)
-            raise ValueError(f"Unexpected type for {name} data")
-        return data
+        # Shuffle all training conversations
+        random.shuffle(all_train_conversations)
+        # Create HF Datasets
+        combined_train_ds = Dataset.from_dict({"conversations": all_train_conversations})
+        
+        # If we have test data
+        combined_test_ds = None
+        if all_test_conversations:
+            combined_test_ds = Dataset.from_dict({"conversations": all_test_conversations})
+
+        logger.info(f"Total Combined Train: {len(combined_train_ds)}")
+        logger.info(f"Total Combined Test: {len(combined_test_ds)}")
+
+        val_size = self.config.training_process.validation.val_size
+        split = combined_train_ds.train_test_split(test_size=val_size, shuffle=True, seed=self.config.random_state)
+        actual_train_ds = split["train"]
+        validation_ds = split["test"]
+        
+        logger.info(f"Final sizes: Train={len(actual_train_ds)}, Val={len(validation_ds)}, Test={len(combined_test_ds)}")    
+
+        return actual_train_ds, validation_ds, combined_test_ds
 
     @staticmethod
-    def apply_chat_template(dataset: Dataset, tokenizer) -> Dataset:
+    def apply_chat_template(datasets: List[Dataset], tokenizer) -> List[Dataset]:
         """Apply chat template to dataset for Unsloth"""
-        logger.info("Applying chat template to dataset...")
+        logger.info("Applying chat template to datasets...")
         
-        # Check first item to ensure structure
-        if not dataset or 'conversations' not in dataset.column_names:
-             logger.warning("Dataset empty or missing 'conversations' column.")
-             return dataset
+        formatted_datasets = []
+        for dataset in datasets:
+            # Check first item to ensure structure
+            if not dataset or 'conversations' not in dataset.column_names:
+                logger.warning("Dataset empty or missing 'conversations' column.")
+                return dataset
 
-        texts = [
-            {
-                "text": tokenizer.apply_chat_template(
-                    convo, tokenize=False, add_generation_prompt=False
-                ).removeprefix("<bos>")
-            }
-            for convo in dataset["conversations"]
-        ]
+            texts = [
+                {
+                    "text": tokenizer.apply_chat_template(
+                        convo, tokenize=False, add_generation_prompt=False
+                    ).removeprefix("<bos>")
+                }
+                for convo in dataset["conversations"]
+            ]
 
-        formatted_dataset = Dataset.from_list(texts)
-        logger.info(f"Dataset formatted. Size: {len(formatted_dataset)}")
-        logger.debug(f"Sample: {formatted_dataset[0]['text'][:100]}...")
+            formatted_dataset = Dataset.from_list(texts)
+            logger.info(f"Dataset formatted. Size: {len(formatted_dataset)}")
+            if len(formatted_dataset) > 0:
+                logger.debug(f"Sample: {formatted_dataset[0]['text'][:100]}...")
+            formatted_datasets.append(formatted_dataset)
         
-        return formatted_dataset
+        return formatted_datasets
