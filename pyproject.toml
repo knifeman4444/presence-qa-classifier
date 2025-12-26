@@ -4,4 +4,6 @@ version = "0.1.0"
 description = "Train and deploy classifier that checks is there an answer on the question in the text."
 readme = "README.md"
 requires-python = ">=3.13"
-dependencies = []
+dependencies = [
+    "dvc>=3.65.0",
+]
